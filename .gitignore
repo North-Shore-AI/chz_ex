@@ -22,3 +22,6 @@ chz_ex-*.tar
 # Temporary files, for example, from tests.
 /tmp/
 /chz/
+
+# Dialyzer PLT files
+/priv/plts/
