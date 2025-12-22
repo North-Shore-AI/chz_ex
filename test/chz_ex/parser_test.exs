@@ -1,8 +1,8 @@
 defmodule ChzEx.ParserTest do
   use ExUnit.Case, async: true
 
-  alias ChzEx.Parser
   alias ChzEx.Blueprint.{Castable, Reference}
+  alias ChzEx.Parser
 
   describe "parse/1" do
     test "parses key=value" do
@@ -31,6 +31,11 @@ defmodule ChzEx.ParserTest do
     test "detects --help flag" do
       assert {:ok, args} = Parser.parse(["--help"])
       assert Parser.help_requested?(args)
+    end
+
+    test "supports allow_hyphens option" do
+      assert {:ok, %{"name" => %Castable{value: "test"}}} =
+               Parser.parse(["--name=test"], allow_hyphens: true)
     end
   end
 

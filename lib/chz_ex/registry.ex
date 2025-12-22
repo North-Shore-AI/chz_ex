@@ -18,6 +18,14 @@ defmodule ChzEx.Registry do
   end
 
   @doc """
+  Register a module under a namespace with aliases.
+  """
+  def register_with_aliases(namespace, short_name, module, aliases \\ [])
+      when is_atom(namespace) and is_binary(short_name) and is_atom(module) and is_list(aliases) do
+    GenServer.call(__MODULE__, {:register_with_aliases, namespace, short_name, module, aliases})
+  end
+
+  @doc """
   Look up a module by namespace and short name.
   """
   def lookup(namespace, short_name) do
@@ -39,10 +47,24 @@ defmodule ChzEx.Registry do
   end
 
   @doc """
+  Return all registered modules.
+  """
+  def registered_modules do
+    GenServer.call(__MODULE__, :registered_modules)
+  end
+
+  @doc """
   Look up a module by its string name.
   """
   def lookup_module(module_str) when is_binary(module_str) do
     GenServer.call(__MODULE__, {:lookup_module, module_str})
+  end
+
+  @doc """
+  Return all registrations for a namespace.
+  """
+  def all_in_namespace(namespace) when is_atom(namespace) do
+    GenServer.call(__MODULE__, {:all_in_namespace, namespace})
   end
 
   @impl true
@@ -62,6 +84,20 @@ defmodule ChzEx.Registry do
   end
 
   @impl true
+  def handle_call({:register_with_aliases, namespace, short_name, module, aliases}, _from, state) do
+    names = [short_name | aliases]
+
+    namespaces =
+      Enum.reduce(names, state.namespaces, fn name, acc ->
+        Map.update(acc, namespace, %{name => module}, &Map.put(&1, name, module))
+      end)
+
+    modules = MapSet.put(state.modules, module)
+
+    {:reply, :ok, %{state | namespaces: namespaces, modules: modules}}
+  end
+
+  @impl true
   def handle_call({:lookup, namespace, short_name}, _from, state) do
     result =
       case get_in(state.namespaces, [namespace, short_name]) do
@@ -70,6 +106,11 @@ defmodule ChzEx.Registry do
       end
 
     {:reply, result, state}
+  end
+
+  @impl true
+  def handle_call({:all_in_namespace, namespace}, _from, state) do
+    {:reply, Map.get(state.namespaces, namespace, %{}), state}
   end
 
   @impl true
@@ -96,10 +137,22 @@ defmodule ChzEx.Registry do
   end
 
   @impl true
+  def handle_call(:registered_modules, _from, state) do
+    {:reply, MapSet.to_list(state.modules), state}
+  end
+
+  @impl true
   def handle_call({:lookup_module, module_str}, _from, state) do
+    module_name =
+      if String.starts_with?(module_str, "Elixir.") do
+        module_str
+      else
+        "Elixir." <> module_str
+      end
+
     module =
       try do
-        String.to_existing_atom("Elixir." <> module_str)
+        String.to_existing_atom(module_name)
       rescue
         ArgumentError -> nil
       end

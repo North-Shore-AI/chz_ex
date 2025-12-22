@@ -67,6 +67,13 @@ defmodule ChzEx.BlueprintTest do
 
       assert hd(bp.arg_map.layers).args["inner.value"] == 12
     end
+
+    test "raises on extraneous args when strict" do
+      assert_raise ChzEx.Error, fn ->
+        Blueprint.new(SimpleConfig)
+        |> Blueprint.apply(%{"unknown" => 1}, strict: true)
+      end
+    end
   end
 
   describe "apply_from_argv/2" do
@@ -76,10 +83,16 @@ defmodule ChzEx.BlueprintTest do
       assert hd(bp.arg_map.layers).args["name"].value == "test"
     end
 
-    test "raises HelpException on --help" do
-      assert_raise ChzEx.HelpException, fn ->
+    test "raises HelpError on --help" do
+      assert_raise ChzEx.HelpError, fn ->
         Blueprint.new(SimpleConfig) |> Blueprint.apply_from_argv(["--help"])
       end
+    end
+
+    test "returns error for extraneous args when strict" do
+      assert {:error, %ChzEx.Error{type: :extraneous}} =
+               Blueprint.new(SimpleConfig)
+               |> Blueprint.apply_from_argv(["unknown=1"], strict: true)
     end
   end
 

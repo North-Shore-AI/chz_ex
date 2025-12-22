@@ -21,7 +21,7 @@ defmodule Examples.CLI do
         System.halt(1)
     end
   rescue
-    e in [ChzEx.HelpException] ->
+    e in [ChzEx.HelpError] ->
       IO.puts(e.message)
       System.halt(0)
   end

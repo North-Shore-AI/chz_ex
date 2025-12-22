@@ -1,5 +1,8 @@
 defmodule ChzEx.Test.Fixtures do
+  @moduledoc false
+
   defmodule SimpleConfig do
+    @moduledoc false
     use ChzEx.Schema
 
     chz_schema do
@@ -9,6 +12,7 @@ defmodule ChzEx.Test.Fixtures do
   end
 
   defmodule InnerConfig do
+    @moduledoc false
     use ChzEx.Schema
 
     chz_schema do
@@ -18,6 +22,7 @@ defmodule ChzEx.Test.Fixtures do
   end
 
   defmodule NestedConfig do
+    @moduledoc false
     use ChzEx.Schema
 
     chz_schema do

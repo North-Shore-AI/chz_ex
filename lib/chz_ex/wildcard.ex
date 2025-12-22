@@ -65,70 +65,66 @@ defmodule ChzEx.Wildcard do
   defp do_approx_match(tokens, target, i, j, memo) do
     key = {i, j}
 
-    case memo do
-      %{^key => result} ->
+    case Map.fetch(memo, key) do
+      {:ok, result} ->
         {result, memo}
 
-      _ ->
-        tokens_len = tuple_size(tokens)
-        target_len = tuple_size(target)
-
-        {result, memo_after} =
-          cond do
-            i == tokens_len and j == target_len ->
-              {{1.0, []}, memo}
-
-            i == tokens_len ->
-              {{0.0, []}, memo}
-
-            j == target_len ->
-              {{0.0, []}, memo}
-
-            elem(tokens, i) == "..." ->
-              {with_wild, memo1} = do_approx_match(tokens, target, i, j + 1, memo)
-              {without_wild, memo2} = do_approx_match(tokens, target, i + 1, j, memo1)
-
-              {score, value} =
-                if elem(with_wild, 0) * @fuzzy_similarity > elem(without_wild, 0) do
-                  {score, value} = with_wild
-                  {score * @fuzzy_similarity, value}
-                else
-                  without_wild
-                end
-
-              value =
-                case value do
-                  [] -> value
-                  ["..." | _] -> value
-                  _ -> ["..." | value]
-                end
-
-              {{score, value}, memo2}
-
-            true ->
-              part = elem(tokens, i)
-              target_part = elem(target, j)
-              ratio = String.jaro_distance(part, target_part)
-
-              if ratio >= @fuzzy_similarity do
-                {next, memo1} = do_approx_match(tokens, target, i + 1, j + 1, memo)
-                {score, value} = next
-                score = score * ratio
-
-                value =
-                  case value do
-                    [] -> [target_part]
-                    ["..." | _] -> [target_part | value]
-                    _ -> ["#{target_part}." | value]
-                  end
-
-                {{score, value}, memo1}
-              else
-                {{0.0, []}, memo}
-              end
-          end
-
+      :error ->
+        {result, memo_after} = compute_approx_match(tokens, target, i, j, memo)
         {result, Map.put(memo_after, key, result)}
     end
   end
+
+  defp compute_approx_match(tokens, target, i, j, memo) do
+    tokens_len = tuple_size(tokens)
+    target_len = tuple_size(target)
+
+    cond do
+      i == tokens_len and j == target_len -> {{1.0, []}, memo}
+      i == tokens_len or j == target_len -> {{0.0, []}, memo}
+      elem(tokens, i) == "..." -> match_wildcard(tokens, target, i, j, memo)
+      true -> match_literal(tokens, target, i, j, memo)
+    end
+  end
+
+  defp match_wildcard(tokens, target, i, j, memo) do
+    {with_wild, memo1} = do_approx_match(tokens, target, i, j + 1, memo)
+    {without_wild, memo2} = do_approx_match(tokens, target, i + 1, j, memo1)
+
+    {score, value} = choose_better_match(with_wild, without_wild)
+    value = prepend_wildcard_marker(value)
+    {{score, value}, memo2}
+  end
+
+  defp choose_better_match({with_score, with_value}, {without_score, without_value}) do
+    if with_score * @fuzzy_similarity > without_score do
+      {with_score * @fuzzy_similarity, with_value}
+    else
+      {without_score, without_value}
+    end
+  end
+
+  defp prepend_wildcard_marker([]), do: []
+  defp prepend_wildcard_marker(["..." | _] = value), do: value
+  defp prepend_wildcard_marker(value), do: ["..." | value]
+
+  defp match_literal(tokens, target, i, j, memo) do
+    part = elem(tokens, i)
+    target_part = elem(target, j)
+    ratio = String.jaro_distance(part, target_part)
+
+    if ratio >= @fuzzy_similarity do
+      {next, memo1} = do_approx_match(tokens, target, i + 1, j + 1, memo)
+      {next_score, next_value} = next
+      score = next_score * ratio
+      value = prepend_literal_part(next_value, target_part)
+      {{score, value}, memo1}
+    else
+      {{0.0, []}, memo}
+    end
+  end
+
+  defp prepend_literal_part([], target_part), do: [target_part]
+  defp prepend_literal_part(["..." | _] = value, target_part), do: [target_part | value]
+  defp prepend_literal_part(value, target_part), do: ["#{target_part}." | value]
 end

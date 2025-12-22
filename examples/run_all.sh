@@ -13,8 +13,14 @@ examples=(
   "validation.exs value=50"
   "mungers.exs name=experiment"
   "presets.exs small model.num_heads=4"
+  "factory_variants.exs handler=beta handler.message=hello"
   "cli_entrypoint.exs name=myapp --help"
   "help_generation.exs"
+  "entrypoint_variants.exs run name=demo count=2"
+  "entrypoint_variants.exs methods train project=demo epochs=5"
+  "entrypoint_variants.exs nested name=demo count=3"
+  "serialization_roundtrip.exs"
+  "type_system.exs"
 )
 
 for example in "${examples[@]}"; do

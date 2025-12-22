@@ -12,12 +12,12 @@ Configuration management with CLI parsing for Elixir.
 
 ChzEx is a native Elixir port of OpenAI's [chz](https://github.com/openai/chz) Python library, providing:
 
-- **Typed configuration schemas** with compile-time validation
-- **CLI argument parsing** (`name=value`, `model.layers=12`)
-- **Polymorphic construction** - specify factory and arguments at runtime
-- **Wildcards** (`...n_layers=100` sets all matching fields)
-- **References** (`target@=source` copies values between fields)
-- **Excellent error UX** with suggestions and source tracking
+- **Typed configuration schemas** with optional runtime type checking and version hashes
+- **CLI argument parsing** (`name=value`, `model.layers=12`) with wildcards and references
+- **Polymorphic construction** via standard, subclass, and function factories
+- **Validators and mungers** for field-level and class-level rules
+- **Serialization utilities** for argv roundtrips and blueprint values
+- **CLI helpers** for dispatch, methods, and nested entrypoints
 
 ## Installation
 
@@ -26,7 +26,7 @@ Add `chz_ex` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:chz_ex, "~> 0.1.0"}
+    {:chz_ex, "~> 0.1.1"}
   ]
 end
 ```
@@ -180,12 +180,21 @@ defmodule MyApp.Config do
 end
 ```
 
+### Serialization Utilities
+
+```elixir
+values = ChzEx.Serialize.to_blueprint_values(config)
+argv = ChzEx.Blueprint.Serialize.to_argv(blueprint)
+IO.puts(ChzEx.Pretty.format(config, true))
+```
+
 ## Documentation
 
 - [Getting Started Guide](docs/guides/getting_started.md)
 - [CLI Parsing](docs/guides/cli_parsing.md)
 - [Polymorphism](docs/guides/polymorphism.md)
 - [Validation](docs/guides/validation.md)
+- [Type System](docs/guides/type_system.md)
 - [API Reference](https://hexdocs.pm/chz_ex)
 
 ## Examples

@@ -140,4 +140,18 @@ defmodule ChzEx.ArgumentMapTest do
       refute "" in ArgumentMap.subpaths(map, "model", strict: true)
     end
   end
+
+  describe "nest_subpath/2" do
+    test "prefixes layer keys" do
+      map =
+        ArgumentMap.new()
+        |> ArgumentMap.add_layer(%{"a" => 1, "...b" => 2})
+
+      layer = hd(map.layers)
+      nested = ArgumentMap.nest_subpath(layer, "root")
+
+      assert nested.args["root.a"] == 1
+      assert nested.args["root...b"] == 2
+    end
+  end
 end

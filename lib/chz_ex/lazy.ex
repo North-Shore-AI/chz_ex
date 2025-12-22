@@ -55,36 +55,70 @@ defmodule ChzEx.Lazy do
         {value, cache}
 
       :error ->
-        if Map.has_key?(in_progress, ref) do
-          cycle = Enum.reverse([ref | stack]) |> Enum.join(" -> ")
-          raise RuntimeError, "Detected cyclic reference: #{cycle}"
-        end
-
-        in_progress = Map.put(in_progress, ref, true)
-        stack = [ref | stack]
-
-        case Map.get(value_mapping, ref) do
-          %Value{value: value} ->
-            {value, Map.put(cache, ref, value)}
-
-          %ParamRef{ref: target} ->
-            {value, cache} = do_evaluate(target, value_mapping, cache, in_progress, stack)
-            {value, Map.put(cache, ref, value)}
-
-          %Thunk{fn: func, kwargs: kwargs} ->
-            {resolved_kwargs, cache} =
-              Enum.reduce(kwargs, {%{}, cache}, fn {key, %ParamRef{ref: target}}, {acc, cache} ->
-                {value, cache} = do_evaluate(target, value_mapping, cache, in_progress, stack)
-                {Map.put(acc, key, value), cache}
-              end)
-
-            result = func.(resolved_kwargs)
-            {result, Map.put(cache, ref, result)}
-
-          nil ->
-            raise RuntimeError, "Reference #{inspect(ref)} not found in value_mapping"
-        end
+        evaluate_uncached(ref, value_mapping, cache, in_progress, stack)
     end
+  end
+
+  defp evaluate_uncached(ref, value_mapping, cache, in_progress, stack) do
+    if Map.has_key?(in_progress, ref) do
+      cycle = Enum.reverse([ref | stack]) |> Enum.join(" -> ")
+      raise RuntimeError, "Detected cyclic reference: #{cycle}"
+    end
+
+    in_progress = Map.put(in_progress, ref, true)
+    stack = [ref | stack]
+    evaluate_ref(ref, value_mapping, cache, in_progress, stack)
+  end
+
+  defp evaluate_ref(ref, value_mapping, cache, in_progress, stack) do
+    case Map.get(value_mapping, ref) do
+      %Value{value: value} ->
+        {value, Map.put(cache, ref, value)}
+
+      %ParamRef{ref: target} ->
+        with_context("when dereferencing #{inspect(target)}", fn ->
+          {value, cache} = do_evaluate(target, value_mapping, cache, in_progress, stack)
+          {value, Map.put(cache, ref, value)}
+        end)
+
+      %Thunk{fn: func, kwargs: kwargs} ->
+        with_context("when evaluating #{inspect(ref)}", fn ->
+          evaluate_thunk(ref, func, kwargs, value_mapping, cache, in_progress, stack)
+        end)
+
+      nil ->
+        raise RuntimeError, "Reference #{inspect(ref)} not found in value_mapping"
+    end
+  end
+
+  defp evaluate_thunk(ref, func, kwargs, value_mapping, cache, in_progress, stack) do
+    {resolved_kwargs, cache} =
+      Enum.reduce(kwargs, {%{}, cache}, fn {key, %ParamRef{ref: target}}, {acc, c} ->
+        {value, c} = do_evaluate(target, value_mapping, c, in_progress, stack)
+        {Map.put(acc, key, value), c}
+      end)
+
+    result = func.(resolved_kwargs)
+    {result, Map.put(cache, ref, result)}
+  end
+
+  defp with_context(context, fun) do
+    fun.()
+  rescue
+    err in [ChzEx.Error] ->
+      reraise err, __STACKTRACE__
+
+    err in [RuntimeError] ->
+      message = Exception.message(err)
+
+      if String.starts_with?(message, "Detected cyclic reference: ") do
+        reraise err, __STACKTRACE__
+      else
+        reraise ChzEx.Error.wrap(err, context), __STACKTRACE__
+      end
+
+    err ->
+      reraise ChzEx.Error.wrap(err, context), __STACKTRACE__
   end
 
   @doc """

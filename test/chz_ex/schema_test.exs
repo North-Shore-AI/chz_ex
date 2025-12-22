@@ -48,6 +48,14 @@ defmodule ChzEx.SchemaTest do
     end
   end
 
+  defmodule TypecheckSchema do
+    use ChzEx.Schema
+
+    chz_schema typecheck: true do
+      field(:count, :integer)
+    end
+  end
+
   describe "chz_schema macro" do
     test "creates struct with fields" do
       struct = %BasicSchema{}
@@ -145,21 +153,54 @@ defmodule ChzEx.SchemaTest do
     end
   end
 
-  describe "is_chz?/1" do
+  describe "chz?/1" do
     test "true for chz module" do
-      assert ChzEx.Schema.is_chz?(BasicSchema)
+      assert ChzEx.Schema.chz?(BasicSchema)
     end
 
     test "true for chz struct" do
-      assert ChzEx.Schema.is_chz?(%BasicSchema{})
+      assert ChzEx.Schema.chz?(%BasicSchema{})
     end
 
     test "false for regular module" do
-      refute ChzEx.Schema.is_chz?(String)
+      refute ChzEx.Schema.chz?(String)
     end
 
     test "false for regular struct" do
-      refute ChzEx.Schema.is_chz?(%{__struct__: Date})
+      refute ChzEx.Schema.chz?(%{__struct__: Date})
+    end
+  end
+
+  describe "schema versioning" do
+    test "exposes version hash" do
+      hash = TypecheckSchema.__chz_version__()
+      assert is_binary(hash)
+      assert byte_size(hash) == 8
+    end
+
+    test "raises on version mismatch" do
+      assert_raise ArgumentError, fn ->
+        Code.compile_string("""
+        defmodule ChzEx.SchemaTest.BadVersion do
+          use ChzEx.Schema
+
+          chz_schema version: "deadbeef" do
+            field(:name, :string)
+          end
+        end
+        """)
+      end
+    end
+  end
+
+  describe "typecheck option" do
+    test "adds typecheck validators to changeset" do
+      struct = %TypecheckSchema{count: "bad"}
+      changeset = TypecheckSchema.changeset(struct, %{})
+
+      refute changeset.valid?
+      assert {msg, _} = changeset.errors[:count]
+      assert String.contains?(msg, "Expected count")
     end
   end
 end

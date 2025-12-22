@@ -40,6 +40,24 @@ defmodule ChzEx.ArgumentMap do
     %{map | layers: map.layers ++ [layer], consolidated: false}
   end
 
+  @doc """
+  Prefix all keys in a layer with a subpath.
+  """
+  def nest_subpath(layer, nil), do: layer
+
+  def nest_subpath(layer, subpath) when is_binary(subpath) do
+    args = prefix_keys(layer.args, subpath)
+    qualified = prefix_keys(layer.qualified, subpath)
+    wildcard = prefix_keys(layer.wildcard, subpath)
+
+    patterns =
+      wildcard
+      |> Enum.map(fn {k, _} -> {k, Wildcard.to_regex(k)} end)
+      |> Map.new()
+
+    %{layer | args: args, qualified: qualified, wildcard: wildcard, patterns: patterns}
+  end
+
   defp build_layer(args, name) do
     {qualified, wildcard} =
       args
@@ -58,6 +76,20 @@ defmodule ChzEx.ArgumentMap do
       wildcard: Map.new(wildcard),
       patterns: patterns
     }
+  end
+
+  defp prefix_keys(map, subpath) do
+    Map.new(map, fn {k, v} -> {join_arg_path(subpath, k), v} end)
+  end
+
+  defp join_arg_path("", child), do: child
+
+  defp join_arg_path(parent, child) do
+    if String.starts_with?(child, ".") or child == "" do
+      parent <> child
+    else
+      parent <> "." <> child
+    end
   end
 
   @doc """
@@ -103,36 +135,40 @@ defmodule ChzEx.ArgumentMap do
 
   def get_kv(%__MODULE__{} = map, key, opts \\ []) do
     ignore_wildcards = Keyword.get(opts, :ignore_wildcards, false)
+    lookup = Map.get(map.consolidated_qualified, key)
 
-    case Map.get(map.consolidated_qualified, key) do
-      {value, idx} when ignore_wildcards ->
-        layer = Enum.at(map.layers, idx)
-        %{key: key, value: value, layer_index: idx, layer_name: layer.name}
-
-      lookup ->
-        lookup_idx = if lookup, do: elem(lookup, 1), else: -1
-
-        wildcard_match =
-          unless ignore_wildcards do
-            Enum.find(map.consolidated_wildcard, fn {_k, pattern, _v, idx} ->
-              idx > lookup_idx and Regex.match?(pattern, key)
-            end)
-          end
-
-        case wildcard_match do
-          {wk, _pattern, value, idx} ->
-            layer = Enum.at(map.layers, idx)
-            %{key: wk, value: value, layer_index: idx, layer_name: layer.name}
-
-          nil when lookup != nil ->
-            {value, idx} = lookup
-            layer = Enum.at(map.layers, idx)
-            %{key: key, value: value, layer_index: idx, layer_name: layer.name}
-
-          nil ->
-            nil
-        end
+    if ignore_wildcards and lookup != nil do
+      build_result(map, key, lookup)
+    else
+      get_kv_with_wildcards(map, key, lookup)
     end
+  end
+
+  defp get_kv_with_wildcards(map, key, lookup) do
+    lookup_idx = if lookup, do: elem(lookup, 1), else: -1
+
+    wildcard_match =
+      Enum.find(map.consolidated_wildcard, fn {_k, pattern, _v, idx} ->
+        idx > lookup_idx and Regex.match?(pattern, key)
+      end)
+
+    cond do
+      wildcard_match != nil ->
+        {wk, _pattern, value, idx} = wildcard_match
+        layer = Enum.at(map.layers, idx)
+        %{key: wk, value: value, layer_index: idx, layer_name: layer.name}
+
+      lookup != nil ->
+        build_result(map, key, lookup)
+
+      true ->
+        nil
+    end
+  end
+
+  defp build_result(map, key, {value, idx}) do
+    layer = Enum.at(map.layers, idx)
+    %{key: key, value: value, layer_index: idx, layer_name: layer.name}
   end
 
   @doc """
@@ -146,67 +182,67 @@ defmodule ChzEx.ArgumentMap do
 
   def subpaths(%__MODULE__{} = map, path, opts) do
     strict = Keyword.get(opts, :strict, false)
+    qualified_subpaths = get_qualified_subpaths(map, path, strict)
+    wildcard_subpaths = get_wildcard_subpaths(map, path, strict)
+    Enum.uniq(qualified_subpaths ++ wildcard_subpaths)
+  end
+
+  defp get_qualified_subpaths(map, path, strict) do
     path_dot = path <> "."
 
-    qualified_subpaths =
-      map.consolidated_qualified_sorted
-      |> Enum.filter(fn k ->
-        cond do
-          not strict and k == path -> true
-          path == "" and k != "" -> true
-          String.starts_with?(k, path_dot) -> true
-          true -> false
-        end
-      end)
-      |> Enum.map(fn k ->
-        cond do
-          k == path -> ""
-          path == "" -> k
-          true -> String.replace_prefix(k, path_dot, "")
-        end
-      end)
-
-    wildcard_subpaths =
-      map.consolidated_wildcard
-      |> Enum.flat_map(fn {wk, pattern, _v, _idx} ->
-        cond do
-          path == "" ->
-            [wk]
-
-          not strict and Regex.match?(pattern, path) ->
-            [""]
-
-          true ->
-            find_wildcard_suffix(wk, path)
-        end
-      end)
-
-    (qualified_subpaths ++ wildcard_subpaths) |> Enum.uniq()
+    map.consolidated_qualified_sorted
+    |> Enum.filter(&qualified_path_matches?(&1, path, path_dot, strict))
+    |> Enum.map(&extract_subpath(&1, path, path_dot))
   end
+
+  defp qualified_path_matches?(k, path, _path_dot, false) when k == path, do: true
+  defp qualified_path_matches?(k, "", _path_dot, _strict) when k != "", do: true
+  defp qualified_path_matches?(k, _path, path_dot, _strict), do: String.starts_with?(k, path_dot)
+
+  defp extract_subpath(k, path, _path_dot) when k == path, do: ""
+  defp extract_subpath(k, "", _path_dot), do: k
+  defp extract_subpath(k, _path, path_dot), do: String.replace_prefix(k, path_dot, "")
+
+  defp get_wildcard_subpaths(map, path, strict) do
+    Enum.flat_map(map.consolidated_wildcard, fn {wk, pattern, _v, _idx} ->
+      wildcard_subpath(wk, pattern, path, strict)
+    end)
+  end
+
+  defp wildcard_subpath(wk, _pattern, "", _strict), do: [wk]
+
+  defp wildcard_subpath(wk, pattern, path, false) do
+    if Regex.match?(pattern, path), do: [""], else: find_wildcard_suffix(wk, path)
+  end
+
+  defp wildcard_subpath(wk, _pattern, path, true), do: find_wildcard_suffix(wk, path)
 
   defp find_wildcard_suffix(wildcard_key, path) do
     literal = path |> String.split(".") |> List.last()
 
     case :binary.match(wildcard_key, literal) do
-      :nomatch ->
-        []
+      :nomatch -> []
+      {pos, len} -> extract_wildcard_suffix(wildcard_key, path, literal, pos, len)
+    end
+  end
 
-      {pos, len} ->
-        prefix = String.slice(wildcard_key, 0, pos + len)
-        suffix = String.slice(wildcard_key, pos + len, String.length(wildcard_key))
+  defp extract_wildcard_suffix(wildcard_key, path, literal, pos, len) do
+    prefix = String.slice(wildcard_key, 0, pos + len)
+    suffix = String.slice(wildcard_key, pos + len, String.length(wildcard_key))
 
-        if String.ends_with?(prefix, literal) and Regex.match?(Wildcard.to_regex(prefix), path) do
-          suffix =
-            cond do
-              String.starts_with?(suffix, "...") -> suffix
-              String.starts_with?(suffix, ".") -> String.slice(suffix, 1..-1//1)
-              true -> suffix
-            end
+    if String.ends_with?(prefix, literal) and Regex.match?(Wildcard.to_regex(prefix), path) do
+      normalized_suffix = normalize_suffix(suffix)
+      if normalized_suffix == "", do: [""], else: [normalized_suffix]
+    else
+      []
+    end
+  end
 
-          if suffix == "", do: [""], else: [suffix]
-        else
-          []
-        end
+  defp normalize_suffix(suffix) do
+    cond do
+      String.starts_with?(suffix, "...") -> suffix
+      String.starts_with?(suffix, ".") -> String.slice(suffix, 1..-1//1)
+      true -> suffix
     end
   end
 end

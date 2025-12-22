@@ -7,6 +7,8 @@ defmodule ChzEx.Error do
     :type,
     :path,
     :message,
+    :cause,
+    :context,
     suggestions: [],
     layer: nil
   ]
@@ -26,12 +28,26 @@ defmodule ChzEx.Error do
     "Missing required argument: #{path}"
   end
 
+  def format(%__MODULE__{type: :extraneous, message: message})
+      when is_binary(message) do
+    message
+  end
+
   def format(%__MODULE__{type: :extraneous, path: path, suggestions: suggestions}) do
     base = "Unknown argument: #{path}"
 
     case suggestions do
       [] -> base
       _ -> base <> " (Did you mean: #{Enum.join(suggestions, ", ")})"
+    end
+  end
+
+  def format(%__MODULE__{type: :construction_error, message: message, context: context})
+      when is_binary(message) do
+    if is_binary(context) do
+      "Construction error: #{message} (#{context})"
+    else
+      "Construction error: #{message}"
     end
   end
 
@@ -53,4 +69,16 @@ defmodule ChzEx.Error do
 
   def format(%__MODULE__{message: message}) when is_binary(message), do: message
   def format(%__MODULE__{}), do: "Unknown error"
+
+  @doc """
+  Wrap an exception with construction context.
+  """
+  def wrap(error, context) do
+    %__MODULE__{
+      type: :construction_error,
+      message: Exception.message(error),
+      cause: error,
+      context: context
+    }
+  end
 end

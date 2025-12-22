@@ -42,6 +42,18 @@ defmodule ChzEx.PolymorphismTest do
     end
   end
 
+  defmodule ListConfig do
+    use ChzEx.Schema
+
+    chz_schema do
+      embeds_many(:optimizers, BaseOptimizer,
+        polymorphic: true,
+        namespace: :test_optimizers,
+        blueprint_unspecified: Adam
+      )
+    end
+  end
+
   setup do
     start_supervised!(ChzEx.Registry)
     ChzEx.Registry.register(:test_optimizers, "adam", Adam)
@@ -92,6 +104,20 @@ defmodule ChzEx.PolymorphismTest do
                  "name=test",
                  "optimizer=unknown"
                ])
+    end
+
+    test "constructs polymorphic lists per index" do
+      {:ok, config} =
+        ChzEx.entrypoint(ListConfig, [
+          "optimizers.0=adam",
+          "optimizers.0.lr=0.0002",
+          "optimizers.1=sgd",
+          "optimizers.1.momentum=0.95"
+        ])
+
+      assert [%Adam{}, %SGD{}] = config.optimizers
+      assert Enum.at(config.optimizers, 0).lr == 0.0002
+      assert Enum.at(config.optimizers, 1).momentum == 0.95
     end
   end
 end

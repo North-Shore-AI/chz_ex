@@ -34,7 +34,7 @@ defmodule ChzEx.Field do
           default_factory: (-> any()) | nil,
           munger: munger() | nil,
           validators: [validator()],
-          meta_factory: module() | nil,
+          meta_factory: struct() | module() | nil,
           blueprint_cast: (String.t() -> {:ok, any()} | {:error, String.t()}) | nil,
           embed_type: :one | :many | nil,
           polymorphic: boolean(),

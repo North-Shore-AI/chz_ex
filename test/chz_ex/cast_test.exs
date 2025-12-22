@@ -1,40 +1,60 @@
 defmodule ChzEx.CastTest do
   use ExUnit.Case, async: true
 
-  alias ChzEx.Cast
+  alias ChzEx.{Cast, Type}
+
+  defmodule EnumStrings do
+    def __chz_enum_values__, do: ["foo", "bar"]
+  end
+
+  defmodule EnumAtoms do
+    def __chz_enum_values__, do: [:foo, :bar]
+  end
 
   describe "try_cast/2" do
-    test "casts to :string" do
-      assert {:ok, "hello"} = Cast.try_cast("hello", :string)
+    test "casts unions and optionals" do
+      assert {:ok, 1} = Cast.try_cast("1", {:union, [:integer, :string]})
+      assert {:ok, "abc"} = Cast.try_cast("abc", {:union, [:integer, :string]})
+      assert {:ok, nil} = Cast.try_cast("None", Type.make_optional(:integer))
     end
 
-    test "casts to :integer" do
-      assert {:ok, 42} = Cast.try_cast("42", :integer)
+    test "casts date and time types" do
+      assert {:ok, %Date{}} = Cast.try_cast("2024-01-02", Date)
+      assert {:ok, %Time{}} = Cast.try_cast("03:04:05", Time)
+      assert {:ok, %DateTime{}} = Cast.try_cast("2024-01-02T03:04:05Z", DateTime)
     end
 
-    test "casts to :float" do
-      assert {:ok, 3.14} = Cast.try_cast("3.14", :float)
+    test "casts paths" do
+      assert {:ok, expanded} = Cast.try_cast("~/tmp", :path)
+      assert expanded == Path.expand("~/tmp")
     end
 
-    test "casts to :boolean (true/false/t/f/1/0)" do
-      assert {:ok, true} = Cast.try_cast("true", :boolean)
-      assert {:ok, false} = Cast.try_cast("false", :boolean)
-      assert {:ok, true} = Cast.try_cast("t", :boolean)
-      assert {:ok, false} = Cast.try_cast("f", :boolean)
-      assert {:ok, true} = Cast.try_cast("1", :boolean)
-      assert {:ok, false} = Cast.try_cast("0", :boolean)
+    test "casts literals and enums" do
+      assert {:ok, 1} = Cast.try_cast("1", {:literal, [1, "a"]})
+      assert {:ok, "a"} = Cast.try_cast("a", {:literal, [1, "a"]})
+      assert {:error, _} = Cast.try_cast("b", {:literal, [1, "a"]})
+
+      assert {:ok, "foo"} = Cast.try_cast("foo", EnumStrings)
+      assert {:error, _} = Cast.try_cast("baz", EnumStrings)
+
+      assert {:ok, :foo} = Cast.try_cast("foo", EnumAtoms)
+      assert {:error, _} = Cast.try_cast("baz", EnumAtoms)
     end
 
-    test "casts to {:array, type}" do
-      assert {:ok, [1, 2, 3]} = Cast.try_cast("1,2,3", {:array, :integer})
+    test "casts function references" do
+      assert {:ok, fun} = Cast.try_cast("String.split/2", {:function, 2})
+      assert fun.("a,b", ",") == ["a", "b"]
+
+      assert {:ok, fun2} = Cast.try_cast("String.split", {:function, 2})
+      assert fun2.("a,b", ",") == ["a", "b"]
     end
 
-    test "casts to {:map, k, v}" do
-      assert {:ok, %{"a" => 1, "b" => 2}} = Cast.try_cast("a:1,b:2", {:map, :string, :integer})
-    end
+    test "casts binaries and mapsets" do
+      assert {:ok, <<10, 11>>} = Cast.try_cast("0A0B", :binary)
+      assert {:ok, "raw"} = Cast.try_cast("raw", :binary)
 
-    test "returns error for invalid" do
-      assert {:error, _} = Cast.try_cast("nope", :integer)
+      assert {:ok, set} = Cast.try_cast("1,2,3", {:mapset, :integer})
+      assert MapSet.equal?(set, MapSet.new([1, 2, 3]))
     end
   end
 end

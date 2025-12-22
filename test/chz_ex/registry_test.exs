@@ -41,6 +41,28 @@ defmodule ChzEx.RegistryTest do
     end
   end
 
+  describe "all_in_namespace/1" do
+    test "returns registered map" do
+      :ok = ChzEx.Registry.register(:test_ns, "sample", SampleModule)
+      assert %{"sample" => SampleModule} = ChzEx.Registry.all_in_namespace(:test_ns)
+    end
+  end
+
+  describe "register_with_aliases/4" do
+    test "registers aliases to the same module" do
+      :ok = ChzEx.Registry.register_with_aliases(:test_ns, "sample", SampleModule, ["alias"])
+      assert {:ok, SampleModule} = ChzEx.Registry.lookup(:test_ns, "sample")
+      assert {:ok, SampleModule} = ChzEx.Registry.lookup(:test_ns, "alias")
+    end
+  end
+
+  describe "registered_modules/0" do
+    test "returns registered modules" do
+      :ok = ChzEx.Registry.register_module(SampleModule)
+      assert SampleModule in ChzEx.Registry.registered_modules()
+    end
+  end
+
   describe "lookup_module/1" do
     test "finds registered module by string" do
       :ok = ChzEx.Registry.register_module(SampleModule)

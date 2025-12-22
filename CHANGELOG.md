@@ -2,4 +2,25 @@
 
 ## Unreleased
 
+## [0.1.1] - 2025-12-22
+
+### Added
+- Subclass and function meta-factories for polymorphic construction.
+- Registry helpers for aliases and namespace listings.
+- Union/optional type helpers, runtime type checks, and richer casting targets.
+- Entrypoint variants (`dispatch`, `methods`, `nested`) and CLI error handling helper.
+- Blueprint serialization to argv and config serialization to blueprint values.
+- Pretty formatting, traversal utilities, and schema version hashing.
+- Additional validators, override checks, and `ChzEx.Validate` macro helpers.
+- New munger helpers (`transform`, `default`, `compose`, `coerce`).
+- Entrypoint variants and serialization roundtrip examples.
+- Type system guide documentation.
+
+### Changed
+- Standard factory resolution now supports nested attribute paths and aliases.
+- Blueprint strict mode and polymorphic list construction coverage improved.
+- CLI parsing can strip leading hyphens via `allow_hyphens: true`.
+
+## [0.1.0] - 2025-12-21
+
 - Initial port skeleton and core features.

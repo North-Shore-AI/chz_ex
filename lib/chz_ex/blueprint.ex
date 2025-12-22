@@ -7,6 +7,7 @@ defmodule ChzEx.Blueprint do
 
   alias ChzEx.{ArgumentMap, Cast, Error, Lazy, Parser, Schema}
   alias ChzEx.Blueprint.{Castable, Reference}
+  alias ChzEx.Factory.Standard, as: StandardFactory
 
   defstruct [
     :target,
@@ -24,7 +25,7 @@ defmodule ChzEx.Blueprint do
   Create a new blueprint for a target module.
   """
   def new(target) when is_atom(target) do
-    if Schema.is_chz?(target) do
+    if Schema.chz?(target) do
       %__MODULE__{
         target: target,
         entrypoint_repr: inspect(target),
@@ -41,36 +42,60 @@ defmodule ChzEx.Blueprint do
   def apply(%__MODULE__{} = bp, args, opts \\ []) when is_map(args) do
     layer_name = Keyword.get(opts, :layer_name)
     subpath = Keyword.get(opts, :subpath)
+    strict = Keyword.get(opts, :strict, false)
 
-    args =
-      if subpath do
-        args
-        |> Enum.map(fn {k, v} -> {"#{subpath}.#{k}", v} end)
-        |> Map.new()
-      else
-        args
-      end
+    args = apply_subpath(args, subpath)
+    bp = %{bp | arg_map: ArgumentMap.add_layer(bp.arg_map, args, layer_name)}
 
-    %{bp | arg_map: ArgumentMap.add_layer(bp.arg_map, args, layer_name)}
+    maybe_check_strict(bp, strict)
+  end
+
+  defp apply_subpath(args, nil), do: args
+
+  defp apply_subpath(args, subpath) do
+    args
+    |> Enum.map(fn {k, v} -> {join_path(subpath, k), v} end)
+    |> Map.new()
+  end
+
+  defp maybe_check_strict(bp, false), do: bp
+
+  defp maybe_check_strict(bp, true) do
+    with {:ok, state} <- make_lazy(bp),
+         :ok <- check_extraneous(bp.arg_map, state) do
+      bp
+    else
+      {:error, %Error{} = err} -> raise err
+    end
   end
 
   @doc """
   Apply arguments from argv.
   """
   def apply_from_argv(%__MODULE__{} = bp, argv, opts \\ []) do
-    case Parser.parse(argv) do
+    allow_hyphens = Keyword.get(opts, :allow_hyphens, false)
+    strict = Keyword.get(opts, :strict, false)
+
+    case Parser.parse(argv, allow_hyphens: allow_hyphens) do
       {:ok, args} ->
         help = Parser.help_requested?(args)
         args = Map.delete(args, :__help__)
 
-        bp =
-          apply(bp, args, layer_name: Keyword.get(opts, :layer_name, "command line"))
+        try do
+          bp =
+            apply(bp, args,
+              layer_name: Keyword.get(opts, :layer_name, "command line"),
+              strict: strict
+            )
 
-        if help do
-          raise ChzEx.HelpException, message: get_help(bp)
+          if help do
+            raise ChzEx.HelpError, message: get_help(bp)
+          end
+
+          {:ok, bp}
+        rescue
+          err in [Error] -> {:error, err}
         end
-
-        {:ok, bp}
 
       {:error, _} = err ->
         err
@@ -83,7 +108,7 @@ defmodule ChzEx.Blueprint do
   def make(%__MODULE__{} = bp) do
     with {:ok, state} <- make_lazy(bp),
          :ok <- check_extraneous(bp.arg_map, state),
-         :ok <- Lazy.check_reference_targets(state.value_mapping, Map.keys(state.all_params)) do
+         :ok <- Lazy.check_reference_targets(state.value_mapping, Map.keys(state.value_mapping)) do
       if state.missing_params != [] do
         {:error, %Error{type: :missing_required, path: hd(state.missing_params)}}
       else
@@ -94,6 +119,9 @@ defmodule ChzEx.Blueprint do
             {:ok, apply_mungers(validated)}
           end
         rescue
+          err in [Error] ->
+            {:error, err}
+
           e in RuntimeError ->
             message = Exception.message(e)
             cycle = String.replace_prefix(message, "Detected cyclic reference: ", "")
@@ -109,10 +137,10 @@ defmodule ChzEx.Blueprint do
   @doc """
   Make from argv, suitable for CLI entrypoints.
   """
-  def make_from_argv(%__MODULE__{} = bp, argv \\ nil) do
+  def make_from_argv(%__MODULE__{} = bp, argv \\ nil, opts \\ []) do
     argv = argv || System.argv()
 
-    case apply_from_argv(bp, argv) do
+    case apply_from_argv(bp, argv, opts) do
       {:ok, bp} -> make(bp)
       {:error, _} = err -> err
     end
@@ -129,7 +157,7 @@ defmodule ChzEx.Blueprint do
     params =
       state.all_params
       |> Enum.sort_by(fn {path, _field} -> path end)
-      |> Enum.map(fn {path, field} ->
+      |> Enum.map_join("\n", fn {path, field} ->
         found = ArgumentMap.get_kv(bp.arg_map, path)
 
         value_str =
@@ -157,14 +185,11 @@ defmodule ChzEx.Blueprint do
         doc = field.doc || ""
         "#{path}  #{type_str}  #{value_str}  #{doc}"
       end)
-      |> Enum.join("\n")
 
     header <> "Arguments:\n" <> params
   end
 
-  defp type_to_string({:array, inner}), do: "array(#{type_to_string(inner)})"
-  defp type_to_string(type) when is_atom(type), do: Atom.to_string(type)
-  defp type_to_string(type), do: inspect(type)
+  defp type_to_string(type), do: ChzEx.Type.type_repr(type)
 
   defp make_lazy(%__MODULE__{} = bp) do
     arg_map = ArgumentMap.consolidate(bp.arg_map)
@@ -227,57 +252,56 @@ defmodule ChzEx.Blueprint do
   defp construct_scalar(field, path, found, state) do
     cond do
       found != nil ->
-        state = mark_used(state, found)
-        value = found.value
-
-        {evaluatable, state} =
-          case value do
-            %Reference{ref: ref} ->
-              if ref == path do
-                if ChzEx.Field.has_default?(field) do
-                  {%Lazy.Value{value: ChzEx.Field.get_default(field)}, state}
-                else
-                  {%Lazy.Value{value: nil}, mark_missing(state, path)}
-                end
-              else
-                {%Lazy.ParamRef{ref: ref}, state}
-              end
-
-            %Castable{value: str} ->
-              {cast_value(field, path, str), state}
-
-            %ChzEx.Blueprint.Computed{sources: sources, compute: compute} ->
-              kwargs =
-                Enum.map(sources, fn {key, %Reference{ref: ref}} ->
-                  key =
-                    case key do
-                      atom when is_atom(atom) -> atom
-                      binary when is_binary(binary) -> String.to_atom(binary)
-                    end
-
-                  {key, %Lazy.ParamRef{ref: ref}}
-                end)
-                |> Map.new()
-
-              {%Lazy.Thunk{fn: compute, kwargs: kwargs}, state}
-
-            _ ->
-              {%Lazy.Value{value: value}, state}
-          end
-
-        put_value(state, path, evaluatable)
+        construct_scalar_from_found(field, path, found, state)
 
       ChzEx.Field.has_default?(field) ->
         put_value(state, path, %Lazy.Value{value: ChzEx.Field.get_default(field)})
 
+      field.munger != nil ->
+        put_value(state, path, %Lazy.Value{value: nil})
+
       true ->
-        if field.munger != nil do
-          put_value(state, path, %Lazy.Value{value: nil})
-        else
-          state = mark_missing(state, path)
-          put_value(state, path, %Lazy.Value{value: nil})
-        end
+        state = mark_missing(state, path)
+        put_value(state, path, %Lazy.Value{value: nil})
     end
+  end
+
+  defp construct_scalar_from_found(field, path, found, state) do
+    state = mark_used(state, found)
+    {evaluatable, state} = resolve_scalar_value(field, path, found.value, state)
+    put_value(state, path, evaluatable)
+  end
+
+  defp resolve_scalar_value(field, path, %Reference{ref: ref}, state) when ref == path do
+    if ChzEx.Field.has_default?(field) do
+      {%Lazy.Value{value: ChzEx.Field.get_default(field)}, state}
+    else
+      {%Lazy.Value{value: nil}, mark_missing(state, path)}
+    end
+  end
+
+  defp resolve_scalar_value(_field, _path, %Reference{ref: ref}, state) do
+    {%Lazy.ParamRef{ref: ref}, state}
+  end
+
+  defp resolve_scalar_value(field, path, %Castable{value: str}, state) do
+    {cast_value(field, path, str), state}
+  end
+
+  defp resolve_scalar_value(_field, _path, %ChzEx.Blueprint.Computed{} = computed, state) do
+    kwargs = build_computed_kwargs(computed.sources)
+    {%Lazy.Thunk{fn: computed.compute, kwargs: kwargs}, state}
+  end
+
+  defp resolve_scalar_value(_field, _path, value, state) do
+    {%Lazy.Value{value: value}, state}
+  end
+
+  defp build_computed_kwargs(sources) do
+    Map.new(sources, fn {key, %Reference{ref: ref}} ->
+      key = if is_binary(key), do: String.to_atom(key), else: key
+      {key, %Lazy.ParamRef{ref: ref}}
+    end)
   end
 
   defp construct_embed_one(field, path, found, subpaths, state) do
@@ -292,7 +316,7 @@ defmodule ChzEx.Blueprint do
     subpaths_present = subpaths != [] or nested_args_present?(field.type, path, state.arg_map)
 
     cond do
-      found != nil and subpaths == [] and not is_special_arg(found.value) ->
+      found != nil and subpaths == [] and not special_arg?(found.value) ->
         state = mark_used(state, found)
         put_value(state, path, %Lazy.Value{value: found.value})
 
@@ -328,34 +352,60 @@ defmodule ChzEx.Blueprint do
   end
 
   defp resolve_factory(field, found, subpaths_present) do
-    factory =
-      ChzEx.Factory.Standard.new(
-        annotation: field.type,
-        unspecified: field.blueprint_unspecified,
-        namespace: field.namespace
-      )
+    factory = meta_factory_for_field(field)
+    factory_module = factory.__struct__
 
     cond do
       found != nil ->
         case found.value do
-          %Castable{value: value} -> ChzEx.Factory.Standard.from_string(factory, value)
+          %Castable{value: value} -> factory_module.from_string(factory, value)
           module when is_atom(module) -> {:ok, module}
           _ -> {:error, "Invalid factory for #{path_label(field)}"}
         end
 
       subpaths_present ->
-        default = ChzEx.Factory.Standard.unspecified_factory(factory)
+        default = factory_module.unspecified_factory(factory)
 
         if default,
           do: {:ok, default},
           else: {:error, "No default factory for #{path_label(field)}"}
 
       true ->
-        default = ChzEx.Factory.Standard.unspecified_factory(factory)
+        default = factory_module.unspecified_factory(factory)
 
         if default,
           do: {:ok, default},
           else: {:error, "No default factory for #{path_label(field)}"}
+    end
+  end
+
+  @doc false
+  def meta_factory_for_field(%ChzEx.Field{} = field) do
+    case field.meta_factory do
+      nil ->
+        StandardFactory.new(
+          annotation: field.type,
+          unspecified: field.blueprint_unspecified,
+          namespace: field.namespace
+        )
+
+      %_{} = meta_factory ->
+        meta_factory
+
+      module when is_atom(module) ->
+        if function_exported?(module, :new, 1) do
+          module.new(
+            annotation: field.type,
+            unspecified: field.blueprint_unspecified,
+            namespace: field.namespace
+          )
+        else
+          raise %Error{
+            type: :invalid_value,
+            path: Atom.to_string(field.name),
+            message: "Invalid meta_factory"
+          }
+        end
     end
   end
 
@@ -364,34 +414,36 @@ defmodule ChzEx.Blueprint do
   end
 
   defp construct_embed_many(field, path, found, subpaths, state) do
+    if field.polymorphic do
+      construct_embed_many_polymorphic(field, path, found, subpaths, state)
+    else
+      cond do
+        usable_found?(found, subpaths) ->
+          state = mark_used(state, found)
+          put_value(state, path, %Lazy.Value{value: found.value})
+
+        subpaths != [] ->
+          {thunk, state} = build_embed_many_from_subpaths(field.type, path, subpaths, state)
+          put_value(state, path, thunk)
+
+        ChzEx.Field.has_default?(field) ->
+          put_value(state, path, %Lazy.Value{value: ChzEx.Field.get_default(field)})
+
+        true ->
+          state = mark_missing(state, path)
+          put_value(state, path, %Lazy.Value{value: []})
+      end
+    end
+  end
+
+  defp construct_embed_many_polymorphic(field, path, found, subpaths, state) do
     cond do
-      found != nil and subpaths == [] and not is_special_arg(found.value) ->
+      usable_found?(found, subpaths) ->
         state = mark_used(state, found)
         put_value(state, path, %Lazy.Value{value: found.value})
 
       subpaths != [] ->
-        indices =
-          subpaths
-          |> Enum.map(&String.split(&1, "."))
-          |> Enum.map(&List.first/1)
-          |> Enum.filter(&(&1 != nil))
-          |> Enum.uniq()
-          |> Enum.sort()
-
-        {kwargs, state} =
-          Enum.reduce(indices, {%{}, state}, fn index, {acc, st} ->
-            st = construct_schema(field.type, join_path(path, index), st)
-            {Map.put(acc, index, %Lazy.ParamRef{ref: join_path(path, index)}), st}
-          end)
-
-        thunk = %Lazy.Thunk{
-          fn: fn resolved ->
-            indices
-            |> Enum.map(fn index -> Map.fetch!(resolved, index) end)
-          end,
-          kwargs: kwargs
-        }
-
+        {thunk, state} = build_polymorphic_many(field, path, subpaths, state)
         put_value(state, path, thunk)
 
       ChzEx.Field.has_default?(field) ->
@@ -401,6 +453,77 @@ defmodule ChzEx.Blueprint do
         state = mark_missing(state, path)
         put_value(state, path, %Lazy.Value{value: []})
     end
+  end
+
+  defp usable_found?(found, subpaths) do
+    found != nil and subpaths == [] and not special_arg?(found.value)
+  end
+
+  defp build_embed_many_from_subpaths(type, path, subpaths, state) do
+    indices = extract_indices(subpaths)
+
+    {kwargs, state} =
+      Enum.reduce(indices, {%{}, state}, fn index, {acc, st} ->
+        {param_ref, st} = build_embed_many_index(type, path, index, st)
+        {Map.put(acc, index, param_ref), st}
+      end)
+
+    {build_index_thunk(indices, kwargs), state}
+  end
+
+  defp build_embed_many_index(type, path, index, state) do
+    index_path = join_path(path, index)
+    state = construct_schema(type, index_path, state)
+    {%Lazy.ParamRef{ref: index_path}, state}
+  end
+
+  defp build_polymorphic_many(field, path, subpaths, state) do
+    indices = extract_indices(subpaths)
+
+    {kwargs, state} =
+      Enum.reduce(indices, {%{}, state}, fn index, {acc, st} ->
+        {param_ref, st} = build_polymorphic_index(field, path, index, st)
+        {Map.put(acc, index, param_ref), st}
+      end)
+
+    {build_index_thunk(indices, kwargs), state}
+  end
+
+  defp build_polymorphic_index(field, path, index, state) do
+    index_path = join_path(path, index)
+    found_index = ArgumentMap.get_kv(state.arg_map, index_path)
+
+    subpaths_present =
+      ArgumentMap.subpaths(state.arg_map, index_path, strict: true) != [] or
+        nested_args_present?(field.type, index_path, state.arg_map)
+
+    case resolve_factory(field, found_index, subpaths_present) do
+      {:ok, factory_module} ->
+        state = if found_index != nil, do: mark_used(state, found_index), else: state
+        state = construct_schema(factory_module, index_path, state)
+        {%Lazy.ParamRef{ref: index_path}, state}
+
+      {:error, reason} ->
+        raise %Error{type: :invalid_value, path: index_path, message: reason}
+    end
+  end
+
+  defp build_index_thunk(indices, kwargs) do
+    %Lazy.Thunk{
+      fn: fn resolved ->
+        Enum.map(indices, fn index -> Map.fetch!(resolved, index) end)
+      end,
+      kwargs: kwargs
+    }
+  end
+
+  defp extract_indices(subpaths) do
+    subpaths
+    |> Enum.map(&String.split(&1, "."))
+    |> Enum.map(&List.first/1)
+    |> Enum.filter(&(&1 != nil))
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   defp cast_value(field, path, str) do
@@ -413,12 +536,12 @@ defmodule ChzEx.Blueprint do
     end
   end
 
-  defp is_special_arg(%Castable{}), do: true
-  defp is_special_arg(%Reference{}), do: true
-  defp is_special_arg(_), do: false
+  defp special_arg?(%Castable{}), do: true
+  defp special_arg?(%Reference{}), do: true
+  defp special_arg?(_), do: false
 
   defp has_all_defaults?(module) when is_atom(module) do
-    if Schema.is_chz?(module) do
+    if Schema.chz?(module) do
       module.__chz_fields__()
       |> Enum.all?(fn {_name, field} -> not ChzEx.Field.required?(field) end)
     else
@@ -427,7 +550,7 @@ defmodule ChzEx.Blueprint do
   end
 
   defp nested_args_present?(module, path, arg_map) do
-    if Schema.is_chz?(module) do
+    if Schema.chz?(module) do
       module
       |> collect_param_paths(path)
       |> Enum.any?(fn param_path -> ArgumentMap.get_kv(arg_map, param_path) != nil end)
@@ -442,7 +565,7 @@ defmodule ChzEx.Blueprint do
       path = join_path(prefix, Atom.to_string(name))
 
       nested =
-        if field.embed_type == :one and Schema.is_chz?(field.type) do
+        if field.embed_type == :one and Schema.chz?(field.type) do
           collect_param_paths(field.type, path)
         else
           []
@@ -469,7 +592,14 @@ defmodule ChzEx.Blueprint do
   end
 
   defp join_path("", child), do: child
-  defp join_path(parent, child), do: "#{parent}.#{child}"
+
+  defp join_path(parent, child) do
+    if String.starts_with?(child, ".") or child == "" do
+      parent <> child
+    else
+      parent <> "." <> child
+    end
+  end
 
   defp check_extraneous(arg_map, state) do
     param_paths = Map.keys(state.all_params)
@@ -477,31 +607,57 @@ defmodule ChzEx.Blueprint do
     arg_map.layers
     |> Enum.with_index()
     |> Enum.reduce_while(:ok, fn {layer, idx}, :ok ->
-      result =
-        layer.args
-        |> Enum.reduce_while(:ok, fn {key, _value}, :ok ->
-          if MapSet.member?(state.used_args, {key, idx}) do
-            {:cont, :ok}
-          else
-            if extraneous_key?(key, param_paths) do
-              {:halt,
-               {:error,
-                %Error{
-                  type: :extraneous,
-                  path: key,
-                  suggestions: suggestions_for(key, param_paths)
-                }}}
-            else
-              {:cont, :ok}
-            end
-          end
-        end)
-
-      case result do
-        :ok -> {:cont, :ok}
-        {:error, _} = err -> {:halt, err}
-      end
+      check_layer_extraneous(layer, idx, state.used_args, param_paths)
     end)
+  end
+
+  defp check_layer_extraneous(layer, idx, used_args, param_paths) do
+    result =
+      Enum.reduce_while(layer.args, :ok, fn {key, _value}, :ok ->
+        check_arg_extraneous(key, idx, used_args, param_paths)
+      end)
+
+    case result do
+      :ok -> {:cont, :ok}
+      {:error, _} = err -> {:halt, err}
+    end
+  end
+
+  defp check_arg_extraneous(key, idx, used_args, param_paths) do
+    cond do
+      MapSet.member?(used_args, {key, idx}) -> {:cont, :ok}
+      not extraneous_key?(key, param_paths) -> {:cont, :ok}
+      true -> {:halt, {:error, extraneous_error(key, param_paths)}}
+    end
+  end
+
+  defp extraneous_error(key, param_paths) do
+    suggestions = suggestions_for(key, param_paths)
+    message = extraneous_message(key, suggestions, param_paths)
+
+    %Error{
+      type: :extraneous,
+      path: key,
+      suggestions: suggestions,
+      message: message
+    }
+  end
+
+  defp extraneous_message(key, suggestions, param_paths) do
+    base = "Unknown argument: #{key}"
+    ancestor = closest_valid_ancestor(key, param_paths)
+
+    hints =
+      []
+      |> add_hint(suggestions != [], "Did you mean: #{Enum.join(suggestions, ", ")}?")
+      |> add_hint(ancestor != nil, "Closest valid ancestor: #{ancestor}")
+      |> add_hint(String.starts_with?(key, "-"), "Did you mean to use allow_hyphens: true?")
+
+    if hints == [] do
+      base
+    else
+      Enum.join([base | hints], "\n")
+    end
   end
 
   defp extraneous_key?(key, param_paths) do
@@ -521,6 +677,25 @@ defmodule ChzEx.Blueprint do
     |> Enum.take(3)
     |> Enum.map(fn {_path, {_score, suggestion}} -> suggestion end)
   end
+
+  defp closest_valid_ancestor(key, param_paths) do
+    parts = String.split(key, ".", trim: true)
+
+    if length(parts) < 2, do: nil, else: find_ancestor(parts, param_paths)
+  end
+
+  defp find_ancestor(parts, param_paths) do
+    param_set = MapSet.new(param_paths)
+
+    (length(parts) - 1)..1
+    |> Enum.find_value(fn idx ->
+      parent = parts |> Enum.take(idx) |> Enum.join(".")
+      if MapSet.member?(param_set, parent), do: parent, else: nil
+    end)
+  end
+
+  defp add_hint(hints, true, message), do: hints ++ [message]
+  defp add_hint(hints, false, _message), do: hints
 
   defp validate_struct(struct) do
     module = struct.__struct__
@@ -565,26 +740,25 @@ defmodule ChzEx.Blueprint do
     end)
   end
 
-  defp validate_value(value) do
-    cond do
-      Schema.is_chz?(value) ->
-        validate_struct(value)
+  defp validate_value(value) when is_struct(value) do
+    if Schema.chz?(value), do: validate_struct(value), else: {:ok, value}
+  end
 
-      is_list(value) ->
-        value
-        |> Enum.reduce_while({:ok, []}, fn item, {:ok, acc} ->
-          case validate_value(item) do
-            {:ok, validated} -> {:cont, {:ok, [validated | acc]}}
-            {:error, _} = err -> {:halt, err}
-          end
-        end)
-        |> case do
-          {:ok, list} -> {:ok, Enum.reverse(list)}
-          {:error, _} = err -> err
+  defp validate_value(value) when is_list(value), do: validate_list(value)
+  defp validate_value(value), do: {:ok, value}
+
+  defp validate_list(list) do
+    result =
+      Enum.reduce_while(list, {:ok, []}, fn item, {:ok, acc} ->
+        case validate_value(item) do
+          {:ok, validated} -> {:cont, {:ok, [validated | acc]}}
+          {:error, _} = err -> {:halt, err}
         end
+      end)
 
-      true ->
-        {:ok, value}
+    case result do
+      {:ok, validated_list} -> {:ok, Enum.reverse(validated_list)}
+      {:error, _} = err -> err
     end
   end
 
@@ -619,7 +793,7 @@ defmodule ChzEx.Blueprint do
 
   defp apply_mungers_to_value(value) do
     cond do
-      Schema.is_chz?(value) -> apply_mungers(value)
+      Schema.chz?(value) -> apply_mungers(value)
       is_list(value) -> Enum.map(value, &apply_mungers_to_value/1)
       true -> value
     end

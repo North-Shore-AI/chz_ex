@@ -24,5 +24,9 @@ mix run examples/basic_config.exs -- name=test value=42
 | validation.exs | Field and class validators |
 | mungers.exs | Post-init transforms |
 | presets.exs | Configuration presets |
+| factory_variants.exs | Subclass and function meta-factories |
 | cli_entrypoint.exs | Full CLI application |
 | help_generation.exs | --help output |
+| entrypoint_variants.exs | Dispatch, methods, and nested entrypoints |
+| serialization_roundtrip.exs | Serialize configs, traverse, and roundtrip argv |
+| type_system.exs | Type representation, casting, and runtime checks |

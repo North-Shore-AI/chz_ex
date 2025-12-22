@@ -31,6 +31,11 @@ defmodule ChzExTest do
       assert {:error, %ChzEx.Error{type: :missing_required}} =
                ChzEx.entrypoint(MainConfig, ["count=3"])
     end
+
+    test "supports allow_hyphens option" do
+      {:ok, config} = ChzEx.entrypoint(MainConfig, ["--name=test"], allow_hyphens: true)
+      assert config.name == "test"
+    end
   end
 
   describe "entrypoint!/2" do
@@ -62,11 +67,11 @@ defmodule ChzExTest do
     end
   end
 
-  describe "is_chz?/1" do
+  describe "chz?/1" do
     test "delegates to Schema" do
-      assert ChzEx.is_chz?(MainConfig)
-      assert ChzEx.is_chz?(%MainConfig{})
-      refute ChzEx.is_chz?(String)
+      assert ChzEx.chz?(MainConfig)
+      assert ChzEx.chz?(%MainConfig{})
+      refute ChzEx.chz?(String)
     end
   end
 

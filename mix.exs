@@ -1,7 +1,7 @@
 defmodule ChzEx.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.1.1"
   @source_url "https://github.com/North-Shore-AI/chz_ex"
 
   def project do
@@ -80,13 +80,16 @@ defmodule ChzEx.MixProject do
       main: "ChzEx",
       source_ref: "v#{@version}",
       source_url: @source_url,
+      assets: %{"assets" => "assets"},
+      logo: "assets/chz_ex.svg",
       extras: [
         "README.md",
         "CHANGELOG.md",
         "docs/guides/getting_started.md",
         "docs/guides/cli_parsing.md",
         "docs/guides/polymorphism.md",
-        "docs/guides/validation.md"
+        "docs/guides/validation.md",
+        "docs/guides/type_system.md"
       ],
       groups_for_extras: [
         Guides: ~r/docs\/guides\/.*/
@@ -131,7 +134,7 @@ defmodule ChzEx.MixProject do
       links: %{
         "GitHub" => @source_url
       },
-      files: ~w(lib .formatter.exs mix.exs README.md LICENSE CHANGELOG.md)
+      files: ~w(lib .formatter.exs mix.exs README.md LICENSE CHANGELOG.md assets)
     ]
   end
 end
