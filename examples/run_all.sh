@@ -21,6 +21,7 @@ examples=(
   "entrypoint_variants.exs nested name=demo count=3"
   "serialization_roundtrip.exs"
   "type_system.exs"
+  "advanced_types.exs"
 )
 
 for example in "${examples[@]}"; do

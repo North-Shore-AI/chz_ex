@@ -9,7 +9,9 @@ defmodule ChzEx.Type do
           | nil
           | {:array, t()}
           | {:map, t(), t()}
+          | {:map_schema, map()}
           | {:mapset, t()}
+          | {:tuple, [t()]}
           | {:union, [t()]}
           | {:literal, [term()]}
           | {:enum, [term()]}
@@ -54,7 +56,21 @@ defmodule ChzEx.Type do
     "%{#{type_repr(key)} => #{type_repr(value)}}"
   end
 
+  def type_repr({:map_schema, fields}) when is_map(fields) do
+    fields_str =
+      fields
+      |> Enum.sort_by(fn {k, _} -> Atom.to_string(k) end)
+      |> Enum.map_join(", ", fn {k, v} -> "#{k}: #{map_schema_field_repr(v)}" end)
+
+    "%{#{fields_str}}"
+  end
+
   def type_repr({:mapset, inner}), do: "MapSet[#{type_repr(inner)}]"
+
+  def type_repr({:tuple, types}) when is_list(types) do
+    types_str = Enum.map_join(types, ", ", &type_repr/1)
+    "{#{types_str}}"
+  end
 
   def type_repr({:literal, values}) do
     "literal[" <> Enum.map_join(values, ", ", &inspect/1) <> "]"
@@ -122,6 +138,16 @@ defmodule ChzEx.Type do
 
   def is_instance?(_value, {:mapset, _inner}), do: false
 
+  def is_instance?(value, {:tuple, types}) when is_tuple(value) and is_list(types) do
+    tuple_list = Tuple.to_list(value)
+
+    length(tuple_list) == length(types) and
+      Enum.zip(tuple_list, types)
+      |> Enum.all?(fn {v, t} -> is_instance?(v, t) end)
+  end
+
+  def is_instance?(_value, {:tuple, _types}), do: false
+
   def is_instance?(value, {:literal, values}), do: value in values
   def is_instance?(value, {:enum, values}), do: value in values
 
@@ -143,6 +169,19 @@ defmodule ChzEx.Type do
     end
   end
 
+  def is_instance?(value, {:map_schema, fields}) when is_map(value) and is_map(fields) do
+    Enum.all?(fields, fn {key, field_spec} ->
+      {type, required} = normalize_map_schema_field(field_spec)
+
+      case Map.fetch(value, key) do
+        {:ok, field_value} -> is_instance?(field_value, type)
+        :error -> required == :optional
+      end
+    end)
+  end
+
+  def is_instance?(_value, {:map_schema, _fields}), do: false
+
   @doc false
   @spec normalize_union([t()]) :: [t()]
   def normalize_union(types) when is_list(types) do
@@ -153,4 +192,17 @@ defmodule ChzEx.Type do
     end)
     |> Enum.uniq()
   end
+
+  @doc """
+  Normalize a map_schema field spec to {type, :required | :optional}.
+  """
+  @spec normalize_map_schema_field(t() | {t(), :required | :optional}) ::
+          {t(), :required | :optional}
+  def normalize_map_schema_field({type, :required}), do: {type, :required}
+  def normalize_map_schema_field({type, :optional}), do: {type, :optional}
+  def normalize_map_schema_field(type), do: {type, :required}
+
+  defp map_schema_field_repr({type, :optional}), do: "#{type_repr(type)}?"
+  defp map_schema_field_repr({type, :required}), do: type_repr(type)
+  defp map_schema_field_repr(type), do: type_repr(type)
 end

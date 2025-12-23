@@ -120,4 +120,43 @@ defmodule ChzEx.PolymorphismTest do
       assert Enum.at(config.optimizers, 1).momentum == 0.95
     end
   end
+
+  defmodule DisabledFactoryConfig do
+    use ChzEx.Schema
+
+    chz_schema do
+      field(:name, :string)
+
+      # Explicitly disable polymorphism - only use the base type
+      embeds_one(:optimizer, BaseOptimizer, meta_factory: :disabled)
+    end
+  end
+
+  describe "meta_factory: :disabled" do
+    test "ignores polymorphic type specifier when disabled" do
+      # When meta_factory is disabled, the optimizer field should only accept
+      # the base type, not parse "sgd" as a type specifier
+      {:ok, config} =
+        ChzEx.entrypoint(DisabledFactoryConfig, [
+          "name=test",
+          "optimizer.lr=0.005"
+        ])
+
+      assert config.optimizer.__struct__ == BaseOptimizer
+      assert config.optimizer.lr == 0.005
+    end
+
+    test "ignores type string when disabled and uses defaults" do
+      # Since polymorphism is disabled, "sgd" is ignored and base type with defaults is used
+      {:ok, config} =
+        ChzEx.entrypoint(DisabledFactoryConfig, [
+          "name=test",
+          "optimizer=sgd"
+        ])
+
+      # The optimizer=sgd is ignored, base type with defaults is used
+      assert config.optimizer.__struct__ == BaseOptimizer
+      assert config.optimizer.lr == 0.001
+    end
+  end
 end

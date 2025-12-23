@@ -30,3 +30,4 @@ mix run examples/basic_config.exs -- name=test value=42
 | entrypoint_variants.exs | Dispatch, methods, and nested entrypoints |
 | serialization_roundtrip.exs | Serialize configs, traverse, and roundtrip argv |
 | type_system.exs | Type representation, casting, and runtime checks |
+| advanced_types.exs | Map schemas, heterogeneous tuples, version suffixes (v0.1.2) |

@@ -152,6 +152,15 @@ defmodule ChzEx.Blueprint do
   def get_help(%__MODULE__{} = bp, _opts \\ []) do
     {:ok, state} = make_lazy(bp)
 
+    # Build warning for missing required params
+    warning =
+      if state.missing_params != [] do
+        missing = state.missing_params |> Enum.sort() |> Enum.join(", ")
+        "WARNING: Missing required arguments for parameter(s): #{missing}\n\n"
+      else
+        ""
+      end
+
     header = "Entry point: #{bp.entrypoint_repr}\n\n"
 
     params =
@@ -159,35 +168,28 @@ defmodule ChzEx.Blueprint do
       |> Enum.sort_by(fn {path, _field} -> path end)
       |> Enum.map_join("\n", fn {path, field} ->
         found = ArgumentMap.get_kv(bp.arg_map, path)
-
-        value_str =
-          cond do
-            found == nil and ChzEx.Field.has_default?(field) ->
-              inspect(ChzEx.Field.get_default(field))
-
-            found == nil ->
-              "-"
-
-            match?(%Reference{}, found.value) ->
-              "@=" <> found.value.ref
-
-            match?(%Castable{}, found.value) ->
-              found.value.value |> inspect()
-
-            match?(%ChzEx.Blueprint.Computed{}, found.value) ->
-              "f(...)"
-
-            true ->
-              inspect(found.value)
-          end
-
+        raw_value = if found, do: found.value, else: nil
+        value_str = format_param_value(raw_value, field)
         type_str = type_to_string(field.type)
         doc = field.doc || ""
         "#{path}  #{type_str}  #{value_str}  #{doc}"
       end)
 
-    header <> "Arguments:\n" <> params
+    warning <> header <> "Arguments:\n" <> params
   end
+
+  defp format_param_value(nil, field) do
+    if ChzEx.Field.has_default?(field) do
+      inspect(ChzEx.Field.get_default(field))
+    else
+      "-"
+    end
+  end
+
+  defp format_param_value(%Reference{} = ref, _field), do: "@=" <> ref.ref
+  defp format_param_value(%Castable{value: val}, _field), do: inspect(val)
+  defp format_param_value(%ChzEx.Blueprint.Computed{}, _field), do: "f(...)"
+  defp format_param_value(other, _field), do: inspect(other)
 
   defp type_to_string(type), do: ChzEx.Type.type_repr(type)
 
@@ -237,12 +239,18 @@ defmodule ChzEx.Blueprint do
     found = ArgumentMap.get_kv(state.arg_map, path)
     subpaths = ArgumentMap.subpaths(state.arg_map, path, strict: true)
 
-    case field.embed_type do
-      :one ->
+    case {field.embed_type, field.type} do
+      {:one, _} ->
         construct_embed_one(field, path, found, subpaths, state)
 
-      :many ->
+      {:many, _} ->
         construct_embed_many(field, path, found, subpaths, state)
+
+      {_, {:map_schema, schema_fields}} ->
+        construct_map_schema(field, path, schema_fields, found, subpaths, state)
+
+      {_, {:tuple, types}} when is_list(types) ->
+        construct_hetero_tuple(field, path, types, found, subpaths, state)
 
       _ ->
         construct_scalar(field, path, found, state)
@@ -302,6 +310,152 @@ defmodule ChzEx.Blueprint do
       key = if is_binary(key), do: String.to_atom(key), else: key
       {key, %Lazy.ParamRef{ref: ref}}
     end)
+  end
+
+  # Map schema construction - expands map fields as individual parameters
+  defp construct_map_schema(_field, path, schema_fields, found, _subpaths, state) do
+    # If a complete map value was provided directly, use it
+    if found != nil and not special_arg?(found.value) do
+      state = mark_used(state, found)
+      put_value(state, path, %Lazy.Value{value: found.value})
+    else
+      expand_map_schema_fields(path, schema_fields, state)
+    end
+  end
+
+  defp expand_map_schema_fields(path, schema_fields, state) do
+    {kwargs, state} =
+      Enum.reduce(schema_fields, {%{}, state}, fn {name, field_spec}, {acc, st} ->
+        process_schema_field_entry(path, name, field_spec, acc, st)
+      end)
+
+    thunk = %Lazy.Thunk{
+      fn: fn resolved -> Map.new(resolved) end,
+      kwargs: kwargs
+    }
+
+    put_value(state, path, thunk)
+  end
+
+  defp process_schema_field_entry(path, name, field_spec, acc, st) do
+    {type, required} = ChzEx.Type.normalize_map_schema_field(field_spec)
+    param_path = join_path(path, Atom.to_string(name))
+
+    virtual_field = %ChzEx.Field{
+      name: name,
+      type: type,
+      raw_type: type,
+      default: nil,
+      default_factory: nil,
+      doc: nil,
+      validators: [],
+      munger: nil,
+      meta_factory: nil,
+      polymorphic: false,
+      blueprint_cast: nil,
+      blueprint_unspecified: nil,
+      namespace: nil,
+      embed_type: nil,
+      repr: true,
+      metadata: %{}
+    }
+
+    st = record_param(st, param_path, virtual_field)
+    found_field = ArgumentMap.get_kv(st.arg_map, param_path)
+
+    st = process_map_schema_field(virtual_field, param_path, found_field, required, st)
+    include_in_kwargs? = found_field != nil or required == :required
+
+    if include_in_kwargs? do
+      {Map.put(acc, name, %Lazy.ParamRef{ref: param_path}), st}
+    else
+      {acc, st}
+    end
+  end
+
+  # Heterogeneous tuple construction - each position has a specific type
+  defp construct_hetero_tuple(_field, path, types, found, _subpaths, state) do
+    # If a complete tuple value was provided directly, use it
+    if found != nil and not special_arg?(found.value) do
+      state = mark_used(state, found)
+      put_value(state, path, %Lazy.Value{value: found.value})
+    else
+      # Expand each position as a separate parameter
+      indices = 0..(length(types) - 1)
+
+      {kwargs, state} =
+        Enum.zip(indices, types)
+        |> Enum.reduce({%{}, state}, fn {idx, type}, {acc, st} ->
+          param_path = join_path(path, Integer.to_string(idx))
+
+          # Create a virtual field for this tuple position
+          virtual_field = %ChzEx.Field{
+            name: String.to_atom("elem_#{idx}"),
+            type: type,
+            raw_type: type,
+            default: nil,
+            default_factory: nil,
+            doc: nil,
+            validators: [],
+            munger: nil,
+            meta_factory: nil,
+            polymorphic: false,
+            blueprint_cast: nil,
+            blueprint_unspecified: nil,
+            namespace: nil,
+            embed_type: nil,
+            repr: true,
+            metadata: %{}
+          }
+
+          st = record_param(st, param_path, virtual_field)
+          found_elem = ArgumentMap.get_kv(st.arg_map, param_path)
+
+          st = process_tuple_element(virtual_field, param_path, found_elem, st)
+          {Map.put(acc, idx, %Lazy.ParamRef{ref: param_path}), st}
+        end)
+
+      # Build a thunk that constructs the final tuple
+      thunk = %Lazy.Thunk{
+        fn: fn resolved ->
+          indices
+          |> Enum.map(&Map.fetch!(resolved, &1))
+          |> List.to_tuple()
+        end,
+        kwargs: kwargs
+      }
+
+      put_value(state, path, thunk)
+    end
+  end
+
+  # Helper for map schema field processing - reduces nesting depth
+  defp process_map_schema_field(virtual_field, param_path, found_field, required, st) do
+    cond do
+      found_field != nil ->
+        st = mark_used(st, found_field)
+        {evaluatable, st} = resolve_scalar_value(virtual_field, param_path, found_field.value, st)
+        put_value(st, param_path, evaluatable)
+
+      required == :optional ->
+        st
+
+      true ->
+        st = mark_missing(st, param_path)
+        put_value(st, param_path, %Lazy.Value{value: nil})
+    end
+  end
+
+  # Helper for tuple element processing - reduces nesting depth
+  defp process_tuple_element(virtual_field, param_path, found_elem, st) do
+    if found_elem != nil do
+      st = mark_used(st, found_elem)
+      {evaluatable, st} = resolve_scalar_value(virtual_field, param_path, found_elem.value, st)
+      put_value(st, param_path, evaluatable)
+    else
+      st = mark_missing(st, param_path)
+      put_value(st, param_path, %Lazy.Value{value: nil})
+    end
   end
 
   defp construct_embed_one(field, path, found, subpaths, state) do

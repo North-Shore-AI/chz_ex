@@ -191,6 +191,45 @@ defmodule ChzEx.SchemaTest do
         """)
       end
     end
+
+    test "accepts version with suffix" do
+      # Version suffixes allow iteration tracking without changing the hash
+      # e.g., "a1b2c3d4-v2" or "a1b2c3d4-iteration3"
+      hash = BasicSchema.__chz_version__()
+
+      # This should compile without error
+      [{mod, _}] =
+        Code.compile_string("""
+        defmodule ChzEx.SchemaTest.VersionWithSuffix do
+          use ChzEx.Schema
+
+          chz_schema version: "#{hash}-v2" do
+            field(:name, :string)
+            field(:count, :integer, default: 3)
+          end
+        end
+        """)
+
+      assert mod.__chz_version__() == hash
+    end
+
+    test "accepts version with numeric suffix" do
+      hash = BasicSchema.__chz_version__()
+
+      [{mod, _}] =
+        Code.compile_string("""
+        defmodule ChzEx.SchemaTest.VersionNumericSuffix do
+          use ChzEx.Schema
+
+          chz_schema version: "#{hash}-3" do
+            field(:name, :string)
+            field(:count, :integer, default: 3)
+          end
+        end
+        """)
+
+      assert mod.__chz_version__() == hash
+    end
   end
 
   describe "typecheck option" do

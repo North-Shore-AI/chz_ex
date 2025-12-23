@@ -66,6 +66,53 @@ end
 
 When enabled, `ChzEx.Validator.typecheck/2` is applied to all fields.
 
+## Map Schema Types
+
+Map schemas allow typed maps with individual field expansion in blueprints:
+
+```elixir
+defmodule MyApp.Config do
+  use ChzEx.Schema
+
+  chz_schema do
+    field :options, {:map_schema, %{
+      timeout: :integer,
+      retries: :integer
+    }}
+  end
+end
+
+# CLI: options.timeout=30 options.retries=3
+# Result: %{timeout: 30, retries: 3}
+```
+
+Fields can be marked as optional:
+
+```elixir
+field :settings, {:map_schema, %{
+  host: {:string, :required},
+  port: {:integer, :required},
+  ssl: {:boolean, :optional}
+}}
+```
+
+## Heterogeneous Tuple Types
+
+Tuples with specific types at each position:
+
+```elixir
+defmodule MyApp.Config do
+  use ChzEx.Schema
+
+  chz_schema do
+    field :coords, {:tuple, [:integer, :integer, :string]}
+  end
+end
+
+# CLI: coords.0=10 coords.1=20 coords.2=north
+# Result: {10, 20, "north"}
+```
+
 ## Schema Version Hashing
 
 Use `version:` to detect schema drift at compile time:
@@ -80,4 +127,12 @@ defmodule MyApp.Config do
 end
 
 ChzEx.Schema.version_hash(MyApp.Config)
+```
+
+Version strings support suffixes for iteration tracking:
+
+```elixir
+chz_schema version: "a1b2c3d4-v2" do
+  # The suffix "-v2" is ignored when validating the hash
+end
 ```

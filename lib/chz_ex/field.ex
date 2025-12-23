@@ -50,6 +50,18 @@ defmodule ChzEx.Field do
   """
   def new(name, type, opts \\ []) when is_atom(name) do
     validate_opts!(opts)
+    meta_factory = Keyword.get(opts, :meta_factory)
+
+    # When meta_factory is :disabled, polymorphism is explicitly disabled
+    polymorphic =
+      if meta_factory == :disabled do
+        false
+      else
+        Keyword.get(opts, :polymorphic, false)
+      end
+
+    # Store nil for :disabled to indicate no factory should be used
+    meta_factory = if meta_factory == :disabled, do: nil, else: meta_factory
 
     %__MODULE__{
       name: name,
@@ -59,10 +71,10 @@ defmodule ChzEx.Field do
       default_factory: Keyword.get(opts, :default_factory),
       munger: normalize_munger(Keyword.get(opts, :munger)),
       validators: normalize_validators(opts),
-      meta_factory: Keyword.get(opts, :meta_factory),
+      meta_factory: meta_factory,
       blueprint_cast: Keyword.get(opts, :blueprint_cast),
       embed_type: Keyword.get(opts, :embed_type),
-      polymorphic: Keyword.get(opts, :polymorphic, false),
+      polymorphic: polymorphic,
       namespace: Keyword.get(opts, :namespace),
       blueprint_unspecified: Keyword.get(opts, :blueprint_unspecified),
       doc: Keyword.get(opts, :doc),

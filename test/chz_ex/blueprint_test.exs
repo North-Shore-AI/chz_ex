@@ -183,5 +183,36 @@ defmodule ChzEx.BlueprintTest do
       assert help =~ "Config name"
       assert help =~ "Enabled flag"
     end
+
+    test "shows warning for missing required params" do
+      help = Blueprint.new(SimpleConfig) |> Blueprint.get_help()
+
+      # name is required and not provided
+      assert help =~ "WARNING"
+      assert help =~ "Missing required"
+      assert help =~ "name"
+    end
+
+    test "no warning when all required params provided" do
+      help =
+        Blueprint.new(SimpleConfig)
+        |> Blueprint.apply(%{"name" => "test"})
+        |> Blueprint.get_help()
+
+      refute help =~ "WARNING"
+      refute help =~ "Missing required"
+    end
+  end
+
+  describe "error layer attribution" do
+    test "error includes layer name when available" do
+      {:error, error} =
+        Blueprint.new(SimpleConfig)
+        |> Blueprint.apply(%{"unknown" => 1}, layer_name: "command line")
+        |> Blueprint.make()
+
+      # The extraneous error should mention the layer
+      assert error.type == :extraneous
+    end
   end
 end

@@ -30,8 +30,11 @@ defmodule ChzEx.Schema do
       chz_field = ChzEx.Field.new(name, type, opts)
       Module.put_attribute(__MODULE__, :chz_fields, {name, chz_field})
 
-      ecto_opts = Keyword.take(opts, [:default, :virtual, :source])
-      Ecto.Schema.__field__(__MODULE__, name, type, ecto_opts)
+      base_ecto_opts = Keyword.take(opts, [:default, :virtual, :source])
+      # Convert ChzEx-specific types to Ecto-compatible types
+      {ecto_type, extra_opts} = ChzEx.Schema.to_ecto_type_with_opts(type)
+      ecto_opts = Keyword.merge(base_ecto_opts, extra_opts)
+      Ecto.Schema.__field__(__MODULE__, name, ecto_type, ecto_opts)
     end
   end
 
@@ -194,7 +197,14 @@ defmodule ChzEx.Schema do
   defp validate_version!(nil, _version_hash, _module), do: :ok
 
   defp validate_version!(version, version_hash, module) do
-    if version != version_hash do
+    # Extract hash portion before any suffix (e.g., "a1b2c3d4-v2" -> "a1b2c3d4")
+    # This allows iteration tracking without invalidating the hash
+    expected =
+      version
+      |> String.split("-", parts: 2)
+      |> List.first()
+
+    if expected != version_hash do
       raise ArgumentError,
             "Schema version #{inspect(version)} does not match #{inspect(version_hash)} for #{inspect(module)}"
     end
@@ -305,9 +315,11 @@ defmodule ChzEx.Schema do
   end
 
   @doc false
-  def version_hash_for_fields(fields) when is_list(fields) do
+  def version_hash_for_fields(fields) when is_list(fields) or is_map(fields) do
+    field_list = if is_map(fields), do: Map.to_list(fields), else: fields
+
     payload =
-      fields
+      field_list
       |> Enum.sort_by(fn {name, _field} -> Atom.to_string(name) end)
       |> Enum.map(&field_version_key/1)
       |> :erlang.term_to_binary()
@@ -360,4 +372,19 @@ defmodule ChzEx.Schema do
 
   def chz?(%{__struct__: module}), do: chz?(module)
   def chz?(_), do: false
+
+  @doc """
+  Convert ChzEx-specific types to Ecto-compatible types.
+  """
+  def to_ecto_type({:map_schema, _fields}), do: :map
+  def to_ecto_type({:tuple, _types}), do: :any
+  def to_ecto_type(type), do: type
+
+  @doc """
+  Convert ChzEx-specific types to Ecto-compatible types with required options.
+  Returns {ecto_type, extra_opts} where extra_opts may include virtual: true.
+  """
+  def to_ecto_type_with_opts({:map_schema, _fields}), do: {:map, []}
+  def to_ecto_type_with_opts({:tuple, _types}), do: {:any, [virtual: true]}
+  def to_ecto_type_with_opts(type), do: {type, []}
 end

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## [0.1.2] - 2025-12-22
+
+### Added
+- Version suffix support (`-N` convention) for schema versioning iteration tracking.
+- Map schema types (`{:map_schema, %{key => type}}`) with field expansion in blueprint.
+- Required/optional map fields using `{type, :required}` or `{type, :optional}` syntax.
+- Heterogeneous tuple types (`{:tuple, [type1, type2, ...]}`) with per-position types.
+- `meta_factory: :disabled` option to explicitly disable polymorphism on fields.
+- Comprehensive Computed reference tests and verification.
+- Help text improvements with warnings for missing required parameters.
+
+### Changed
+- Blueprint construction now expands map schema and tuple types as indexed parameters.
+- Field macro converts ChzEx-specific types to Ecto-compatible types automatically.
+
 ## [0.1.1] - 2025-12-22
 
 ### Added
