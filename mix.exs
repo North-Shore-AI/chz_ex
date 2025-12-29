@@ -1,7 +1,7 @@
 defmodule ChzEx.MixProject do
   use Mix.Project
 
-  @version "0.1.2"
+  @version "0.1.3"
   @source_url "https://github.com/North-Shore-AI/chz_ex"
 
   def project do
@@ -80,6 +80,7 @@ defmodule ChzEx.MixProject do
       main: "ChzEx",
       source_ref: "v#{@version}",
       source_url: @source_url,
+      homepage_url: @source_url,
       assets: %{"assets" => "assets"},
       logo: "assets/chz_ex.svg",
       extras: [

@@ -26,7 +26,7 @@ Add `chz_ex` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:chz_ex, "~> 0.1.2"}
+    {:chz_ex, "~> 0.1.3"}
   ]
 end
 ```

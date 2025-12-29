@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## [0.1.3] - 2025-12-28
+
+### Fixed
+- `chz?/1` now calls `Code.ensure_loaded?/1` before checking for exported functions to prevent errors with unloaded modules.
+
 ## [0.1.2] - 2025-12-22
 
 ### Added

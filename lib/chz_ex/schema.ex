@@ -367,7 +367,9 @@ defmodule ChzEx.Schema do
   Check if a module or struct is a ChzEx schema.
   """
   def chz?(module) when is_atom(module) do
-    function_exported?(module, :__chz__?, 0) and module.__chz__?()
+    Code.ensure_loaded?(module) and
+      function_exported?(module, :__chz__?, 0) and
+      module.__chz__?()
   end
 
   def chz?(%{__struct__: module}), do: chz?(module)
