@@ -135,7 +135,7 @@ defmodule ChzEx.MixProject do
       links: %{
         "GitHub" => @source_url
       },
-      files: ~w(lib .formatter.exs mix.exs README.md LICENSE CHANGELOG.md assets)
+      files: ~w(lib .formatter.exs mix.exs README.md LICENSE CHANGELOG.md assets docs)
     ]
   end
 end
